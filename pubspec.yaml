@@ -1,0 +1,28 @@
+name: monnaie_check
+description: A new Flutter project to validate FCFA banknotes and coins.
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.9
+  opencv_dart: ^2.2.1+4
+  google_mlkit_text_recognition: ^0.15.1
+  image_picker: ^1.2.2
+  path_provider: ^2.1.5
+  camera: ^0.12.0+1
+  tflite_flutter: ^0.12.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+    - models/
