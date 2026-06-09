@@ -39,11 +39,14 @@ class VisionPipeline {
     // _yoloInterpreter.runForMultipleInputs(...);
 
     return RuleEngine.validateBanknote(
-      surfacePercentage: surfacePercent,
-      hasInscriptions: false,
-      isTornAndCleanlyRepaired: false,
-      isBurnedOrSeverelyWashed: false,
-      hasVisibleSerialNumber: true,
+      AnalysisMetrics(
+        isBanknote: true,
+        surfacePercentage: surfacePercent,
+        hasAnomalousInk: false,
+        isSerialNumberReadable: true,
+        textureSharpness: 85.0,
+        denomination: "Unknown",
+      ),
     );
   }
 
@@ -58,9 +61,12 @@ class VisionPipeline {
     // _efficientNetInterpreter.run(input, output);
 
     return RuleEngine.validateCoin(
-      isWornNaturally: true,
-      isDrilledOrFormedByAlteration: false,
-      isWeldedToAnother: false,
+      AnalysisMetrics(
+        isBanknote: false,
+        surfacePercentage: 100.0,
+        textureSharpness: 90.0,
+        coinConvexity: 0.99,
+      ),
     );
   }
 

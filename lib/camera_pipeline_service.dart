@@ -58,7 +58,10 @@ class CameraPipelineService {
   bool _isProcessing = false;
 
   // Blur filter threshold — tuned for FCFA currency size at ~30cm
-  static const double _sharpnessThreshold = 80.0;
+  static const double sharpnessThreshold = 80.0;
+
+  // Getter for the threshold
+  double get currentSharpnessThreshold => sharpnessThreshold;
 
   // Luminosity threshold for auto torch (0-255)
   static const double _darkLuminosityThreshold = 60.0;
@@ -152,7 +155,7 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   // In real prod: pass pointer to opencv_dart for C++ implementation (5ms)
   double laplacianVariance = _computeLaplacianVariance(yPlane, input.width, input.height);
 
-  if (laplacianVariance < CameraPipelineService._sharpnessThreshold) {
+  if (laplacianVariance < CameraPipelineService.sharpnessThreshold) {
     // Frame is blurry → skip processing, tell UI to show "Stabilisez"
     return PipelineResult(
       verdict: ValidationResult(
@@ -174,11 +177,12 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   // Here we implement the Dart fallback (safe but ~20ms on budget devices).
   // The real implementation would call: cv.cvtColor(yuv, cv.COLOR_YUV2RGB_NV21)
   // ─────────────────────────────────────────────────────────
-  final rgb = _yuv420ToRgb(
-    input.yPlane, input.uPlane, input.vPlane,
-    input.width, input.height,
-    input.uvRowStride, input.uvPixelStride,
-  );
+  // final rgb = _yuv420ToRgb(
+  //   input.yPlane, input.uPlane, input.vPlane,
+  //   input.width, input.height,
+  //   input.uvRowStride, input.uvPixelStride,
+  // );
+  // Note: RGB is ignored for now to fix 'unused' warning and speed up prototype.
 
   // ─────────────────────────────────────────────────────────
   // STEP 2: OpenCV Surface Calculation (via opencv_dart FFI)
@@ -197,19 +201,14 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   // ─────────────────────────────────────────────────────────
   // STEP 4: Legal Rule Engine (pure Dart, deterministic)
   // ─────────────────────────────────────────────────────────
-  final verdict = input.isBanknote
-      ? RuleEngine.validateBanknote(
-          surfacePercentage: surfacePercentage,
-          hasInscriptions: false,
-          isTornAndCleanlyRepaired: false,
-          isBurnedOrSeverelyWashed: false,
-          hasVisibleSerialNumber: true,
-        )
-      : RuleEngine.validateCoin(
-          isWornNaturally: true,
-          isDrilledOrFormedByAlteration: false,
-          isWeldedToAnother: false,
-        );
+  final verdict = RuleEngine.evaluate(
+    AnalysisMetrics(
+      isBanknote: input.isBanknote,
+      surfacePercentage: surfacePercentage,
+      textureSharpness: laplacianVariance,
+      coinConvexity: 1.0, // Default for now
+    ),
+  );
 
   return PipelineResult(
     verdict: verdict,
@@ -247,39 +246,4 @@ double _computeLaplacianVariance(Uint8List gray, int width, int height) {
   if (count == 0) return 0;
   final mean = sum / count;
   return (sumSq / count) - (mean * mean); // Variance
-}
-
-/// Fast YUV_420_888 to RGB byte array conversion.
-/// In production, this is replaced by a direct OpenCV FFI call (< 5ms).
-/// This Dart version runs in ~30ms on MediaTek Helio G35.
-Uint8List _yuv420ToRgb(
-  Uint8List yPlane,
-  Uint8List uPlane,
-  Uint8List vPlane,
-  int width,
-  int height,
-  int uvRowStride,
-  int uvPixelStride,
-) {
-  final rgb = Uint8List(width * height * 3);
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      final yIdx = y * width + x;
-      final uvIdx = (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
-
-      final yVal = yPlane[yIdx];
-      final uVal = uPlane[uvIdx] - 128;
-      final vVal = vPlane[uvIdx] - 128;
-
-      final r = (yVal + 1.370705 * vVal).clamp(0, 255).toInt();
-      final g = (yVal - 0.698001 * vVal - 0.337633 * uVal).clamp(0, 255).toInt();
-      final b = (yVal + 1.732446 * uVal).clamp(0, 255).toInt();
-
-      final rgbIdx = yIdx * 3;
-      rgb[rgbIdx] = r;
-      rgb[rgbIdx + 1] = g;
-      rgb[rgbIdx + 2] = b;
-    }
-  }
-  return rgb;
 }

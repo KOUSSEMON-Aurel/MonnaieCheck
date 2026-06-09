@@ -49,8 +49,8 @@ class HomeScreen extends StatelessWidget {
             end: Alignment.bottomCenter,
             colors: [
               theme.colorScheme.surface,
-              theme.colorScheme.surface.withOpacity(0.8),
-              const Color(0xFF0D47A1).withOpacity(0.2),
+              theme.colorScheme.surface.withValues(alpha: 0.8),
+              const Color(0xFF0D47A1).withValues(alpha: 0.2),
             ],
           ),
         ),
@@ -147,7 +147,7 @@ class HomeScreen extends StatelessWidget {
     required VoidCallback onTap,
   }) {
     return Material(
-      color: Colors.white.withOpacity(0.05),
+      color: Colors.white.withValues(alpha: 0.05),
       borderRadius: BorderRadius.circular(24),
       child: InkWell(
         onTap: onTap,
@@ -155,7 +155,7 @@ class HomeScreen extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            border: Border.all(color: Colors.white.withOpacity(0.1)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
             borderRadius: BorderRadius.circular(24),
           ),
           child: Row(
@@ -163,7 +163,7 @@ class HomeScreen extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
+                  color: color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Icon(icon, color: color, size: 28),
@@ -185,7 +185,7 @@ class HomeScreen extends StatelessWidget {
                       subtitle,
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.white.withOpacity(0.6),
+                        color: Colors.white.withValues(alpha: 0.6),
                       ),
                     ),
                   ],
@@ -193,7 +193,7 @@ class HomeScreen extends StatelessWidget {
               ),
               Icon(
                 Icons.chevron_right_rounded,
-                color: Colors.white.withOpacity(0.3),
+                color: Colors.white.withValues(alpha: 0.3),
               ),
             ],
           ),

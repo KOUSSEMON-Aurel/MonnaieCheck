@@ -62,7 +62,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
     setState(() {
       _lastResult = result;
-      _isBlurry = result.sharpnessScore < CameraPipelineService._sharpnessThreshold;
+      _isBlurry = result.sharpnessScore < _pipeline.currentSharpnessThreshold;
       _flashOn = result.flashWasActivated;
     });
   }
@@ -134,7 +134,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
         // Dark overlay with a clear hole
         ColorFiltered(
           colorFilter: ColorFilter.mode(
-            Colors.black.withOpacity(0.55),
+            Colors.black.withValues(alpha: 0.55),
             BlendMode.srcOut,
           ),
           child: Stack(
@@ -243,7 +243,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
           icon: Icons.blur_on,
           color: Colors.orange,
           message: 'Stabilisez l\'appareil — Image floue',
-          subtext: 'Netteté: ${res.sharpnessScore.toStringAsFixed(0)} / ${CameraPipelineService._sharpnessThreshold.toInt()} requis',
+          subtext: 'Netteté: ${res.sharpnessScore.toStringAsFixed(0)} / ${CameraPipelineService.sharpnessThreshold.toInt()} requis',
         ),
       );
     }
@@ -272,10 +272,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
         margin: const EdgeInsets.all(20),
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E).withOpacity(0.96),
+          color: const Color(0xFF1C1C1E).withValues(alpha: 0.96),
           borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: color.withOpacity(0.4), width: 1.5),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.7), blurRadius: 30)],
+          border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.7), blurRadius: 30)],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -284,7 +284,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
               children: [
                 Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: color.withOpacity(0.15), shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: color.withValues(alpha: 0.15), shape: BoxShape.circle),
                   child: Icon(icon, color: color, size: 30),
                 ),
                 const SizedBox(width: 12),
@@ -329,9 +329,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
       margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E).withOpacity(0.96),
+        color: const Color(0xFF1C1C1E).withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.5)),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -370,7 +370,7 @@ class _DefectBoxPainter extends CustomPainter {
 
     for (final defect in defects) {
       final paint = Paint()
-        ..color = Colors.redAccent.withOpacity(0.85)
+        ..color = Colors.redAccent.withValues(alpha: 0.85)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5;
 
