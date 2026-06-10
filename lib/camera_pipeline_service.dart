@@ -13,7 +13,9 @@
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'rule_engine.dart';
+import 'cv_engine.dart';
 
 /// Represents a detected defect bounding box from the IA model
 class DefectBox {
@@ -63,8 +65,10 @@ class CameraPipelineService {
   // Getter for the threshold
   double get currentSharpnessThreshold => sharpnessThreshold;
 
-  // Luminosity threshold for auto torch (0-255)
-  static const double _darkLuminosityThreshold = 60.0;
+  // Luminance thresholds for auto torch (Hysteresis)
+  static const double _luxOnThreshold = 50.0;
+  static const double _luxOffThreshold = 85.0;
+  bool _flashWasPreviouslyActive = false;
 
   /// Called on every camera frame from startImageStream.
   /// Returns null if frame is skipped (either pipeline is busy or image is blurry).
@@ -91,15 +95,17 @@ class CameraPipelineService {
           uvRowStride: yuv420Frame.planes[1].bytesPerRow,
           uvPixelStride: yuv420Frame.planes[1].bytesPerPixel ?? 1,
           isBanknote: isBanknote,
+          currentFlashState: _flashWasPreviouslyActive,
         ),
       );
 
-      // === AUTO-TORCH ACTIVATION ===
-      // If image was too dark, activate camera torch.
-      if (result.flashWasActivated) {
-        await controller.setFlashMode(FlashMode.torch);
-      } else {
-        await controller.setFlashMode(FlashMode.off);
+      // === STATEFUL AUTO-TORCH (Hysteresis) ===
+      // Only toggle if the state has truly changed based on hysteresis
+      if (result.flashWasActivated != _flashWasPreviouslyActive) {
+        _flashWasPreviouslyActive = result.flashWasActivated;
+        await controller.setFlashMode(
+          _flashWasPreviouslyActive ? FlashMode.torch : FlashMode.off,
+        );
       }
 
       return result;
@@ -120,6 +126,8 @@ class _PipelineInput {
   final int uvPixelStride;
   final bool isBanknote;
 
+  final bool currentFlashState;
+
   _PipelineInput({
     required this.yPlane,
     required this.uPlane,
@@ -129,6 +137,7 @@ class _PipelineInput {
     required this.uvRowStride,
     required this.uvPixelStride,
     required this.isBanknote,
+    required this.currentFlashState,
   });
 }
 
@@ -142,18 +151,28 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   final yPlane = input.yPlane;
   final totalPixels = input.width * input.height;
 
-  // --- Compute average luminosity from Y plane (histogram analysis) ---
+  // --- Compute average luminosity from Y plane (sampled for speed) ---
   double sumLuminosity = 0;
-  for (int i = 0; i < totalPixels; i++) {
+  for (int i = 0; i < totalPixels; i += 4) {
     sumLuminosity += yPlane[i];
   }
-  final avgLuminosity = sumLuminosity / totalPixels;
-  final needsFlash = avgLuminosity < CameraPipelineService._darkLuminosityThreshold;
+  final avgLuminosity = (sumLuminosity * 4) / totalPixels;
+
+  // --- Hysteresis Logic ---
+  bool needsFlash = input.currentFlashState;
+  if (!input.currentFlashState &&
+      avgLuminosity < CameraPipelineService._luxOnThreshold) {
+    needsFlash = true; // Turn ON
+  } else if (input.currentFlashState &&
+      avgLuminosity > CameraPipelineService._luxOffThreshold) {
+    needsFlash = false; // Turn OFF
+  }
 
   // --- Laplacian Variance (blurriness detection) on Y plane ---
   // Simplified 2D Laplacian kernel: approximates OpenCV cv.Laplacian for speed
   // In real prod: pass pointer to opencv_dart for C++ implementation (5ms)
-  double laplacianVariance = _computeLaplacianVariance(yPlane, input.width, input.height);
+  double laplacianVariance =
+      _computeLaplacianVariance(yPlane, input.width, input.height);
 
   if (laplacianVariance < CameraPipelineService.sharpnessThreshold) {
     // Frame is blurry → skip processing, tell UI to show "Stabilisez"
@@ -172,43 +191,53 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   }
 
   // ─────────────────────────────────────────────────────────
-  // STEP 1: YUV_420_888 → RGB Bytes
-  // In production: this is done via opencv_dart FFI with direct pointer passing.
-  // Here we implement the Dart fallback (safe but ~20ms on budget devices).
-  // The real implementation would call: cv.cvtColor(yuv, cv.COLOR_YUV2RGB_NV21)
+  // STEP 1: YUV_420_888 → OpenCV Mat (Grayscale/Y-plane is enough for some tasks)
   // ─────────────────────────────────────────────────────────
-  // final rgb = _yuv420ToRgb(
-  //   input.yPlane, input.uPlane, input.vPlane,
-  //   input.width, input.height,
-  //   input.uvRowStride, input.uvPixelStride,
-  // );
-  // Note: RGB is ignored for now to fix 'unused' warning and speed up prototype.
+  // We wrap the Y plane in an OpenCV Mat for native processing
+  final mat =
+      cv.Mat.fromList(input.height, input.width, cv.MatType.CV_8UC1, yPlane);
+  final cvEngine = CvEngine();
 
   // ─────────────────────────────────────────────────────────
-  // STEP 2: OpenCV Surface Calculation (via opencv_dart FFI)
-  // In production: cv.Canny → cv.findContours → cv.warpPerspective → countNonZero
+  // STEP 2: OpenCV Analysis (via CvEngine)
   // ─────────────────────────────────────────────────────────
-  const surfacePercentage = 96.0; // Placeholder for OpenCV calculation
+  double surfacePercentage = 0.0;
+  bool inkDetected = false;
+  double convexity = 1.0;
+
+  if (input.isBanknote) {
+    // Surface estimation (Simplified for budget device: non-zero pixels)
+    final total = cv.countNonZero(mat);
+    surfacePercentage = (total / totalPixels) * 100;
+
+    // Art 14 Ink Detection (LAB color space requires BGR)
+    // For now, we use a placeholder for BGR conversion or skip if Y-only.
+    // inkDetected = cvEngine.detectArt14Ink(bgrMat).$2;
+  } else {
+    convexity = cvEngine
+        .calculateConvexity(mat); // Modified calculateConvexity to handle Gray
+  }
 
   // ─────────────────────────────────────────────────────────
-  // STEP 3: IA Inference (YOLOv8n or EfficientNet)
-  // In production: tflite_flutter Interpreter.runForMultipleInputs()
-  // ─────────────────────────────────────────────────────────
-  final defects = input.isBanknote
-      ? <DefectBox>[] // YOLOv8n output: list of bounding boxes
-      : <DefectBox>[]; // EfficientNet output: wear classification
-
-  // ─────────────────────────────────────────────────────────
-  // STEP 4: Legal Rule Engine (pure Dart, deterministic)
+  // STEP 3: Legal Rule Engine (pure Dart, deterministic)
   // ─────────────────────────────────────────────────────────
   final verdict = RuleEngine.evaluate(
     AnalysisMetrics(
       isBanknote: input.isBanknote,
       surfacePercentage: surfacePercentage,
       textureSharpness: laplacianVariance,
-      coinConvexity: 1.0, // Default for now
+      coinConvexity: convexity,
+      hasAnomalousInk: inkDetected, // Now using inkDetected
     ),
   );
+
+  // ─────────────────────────────────────────────────────────
+  // STEP 3 continuation: Object detection & OCR via ML Kit
+  // (handled outside isolates — ML Kit runs on main thread via InputImage)
+  // For defect bounding boxes, the ScannerScreen passes the InputImage to VisionPipeline.
+  // This isolate only handles pure Dart/OpenCV work.
+  // ─────────────────────────────────────────────────────────
+  final defects = <DefectBox>[];
 
   return PipelineResult(
     verdict: verdict,
@@ -232,11 +261,11 @@ double _computeLaplacianVariance(Uint8List gray, int width, int height) {
   for (int y = 1; y < height - 1; y += 4) {
     for (int x = 1; x < width - 1; x += 4) {
       final idx = y * width + x;
-      final laplacian = (-4 * gray[idx]
-          + gray[idx - 1]
-          + gray[idx + 1]
-          + gray[idx - width]
-          + gray[idx + width])
+      final laplacian = (-4 * gray[idx] +
+              gray[idx - 1] +
+              gray[idx + 1] +
+              gray[idx - width] +
+              gray[idx + width])
           .toDouble();
       sum += laplacian;
       sumSq += laplacian * laplacian;

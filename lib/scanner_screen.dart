@@ -103,8 +103,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
           _buildStatusBar(),
 
           // Verdict Result Card
-          if (_lastResult != null && !_isBlurry)
-            _buildResultCard(),
+          if (_lastResult != null && !_isBlurry) _buildResultCard(),
 
           // Back Button
           Positioned(
@@ -124,8 +123,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
   }
 
   Widget _buildScanZoneOverlay(Size size) {
-    final areaW = size.width * 0.85;
-    final areaH = widget.isBanknote ? 200.0 : areaW;
+    // Banknotes are scanned in portrait (vertical) for better ergonomics.
+    // Coins remain circular/square.
+    final areaW = widget.isBanknote ? size.width * 0.65 : size.width * 0.85;
+    final areaH = widget.isBanknote ? areaW * 1.6 : areaW;
     final top = (size.height - areaH) / 2;
     final left = (size.width - areaW) / 2;
 
@@ -166,22 +167,45 @@ class _ScannerScreenState extends State<ScannerScreen> {
             height: areaH,
             decoration: BoxDecoration(
               border: Border.all(
-                color: _isBlurry ? Colors.redAccent : Colors.blueAccent,
-                width: 2.5,
+                color: _isBlurry
+                    ? Colors.redAccent.withValues(alpha: 0.8)
+                    : Colors.blueAccent.withValues(alpha: 0.8),
+                width: 2.0,
               ),
               borderRadius: BorderRadius.circular(
-                widget.isBanknote ? 16 : areaW,
+                widget.isBanknote ? 24 : areaW,
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: (_isBlurry ? Colors.redAccent : Colors.blueAccent)
+                      .withValues(alpha: 0.2),
+                  blurRadius: 15,
+                  spreadRadius: 2,
+                )
+              ],
             ),
             alignment: Alignment.bottomCenter,
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(
-              widget.isBanknote ? 'Cadrez le billet' : 'Cadrez la pièce',
-              style: TextStyle(
-                color: _isBlurry ? Colors.redAccent : Colors.blue[100],
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Icon(
+                  widget.isBanknote ? Icons.portrait : Icons.circle_outlined,
+                  color: _isBlurry ? Colors.redAccent : Colors.blue[100],
+                  size: 20,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.isBanknote ? 'ALIGNER LE BILLET' : 'ALIGNER LA PIÈCE',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _isBlurry ? Colors.redAccent : Colors.blue[100],
+                    fontSize: 11,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -213,7 +237,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
             if (_flashOn)
               Container(
                 margin: const EdgeInsets.only(right: 16, top: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.amberAccent,
                   borderRadius: BorderRadius.circular(12),
@@ -222,7 +247,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   children: [
                     Icon(Icons.flash_on, size: 16, color: Colors.black),
                     SizedBox(width: 4),
-                    Text('TORCHE AUTO', style: TextStyle(color: Colors.black, fontSize: 12, fontWeight: FontWeight.bold)),
+                    Text('TORCHE AUTO',
+                        style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
@@ -243,7 +272,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
           icon: Icons.blur_on,
           color: Colors.orange,
           message: 'Stabilisez l\'appareil — Image floue',
-          subtext: 'Netteté: ${res.sharpnessScore.toStringAsFixed(0)} / ${CameraPipelineService.sharpnessThreshold.toInt()} requis',
+          subtext:
+              'Netteté: ${res.sharpnessScore.toStringAsFixed(0)} / ${CameraPipelineService.sharpnessThreshold.toInt()} requis',
         ),
       );
     }
@@ -260,7 +290,7 @@ class _ScannerScreenState extends State<ScannerScreen> {
             ? Icons.cancel_rounded
             : Icons.warning_rounded;
 
-    final title = switch(res.verdict.verdict) {
+    final title = switch (res.verdict.verdict) {
       Verdict.mandatoryAcceptance => 'ACCEPTATION OBLIGATOIRE',
       Verdict.legitimateRefusal => 'REFUS LÉGITIME',
       Verdict.exchangeAtBCEAO => 'ÉCHANGE À LA BCEAO',
@@ -275,7 +305,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
           color: const Color(0xFF1C1C1E).withValues(alpha: 0.96),
           borderRadius: BorderRadius.circular(32),
           border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.7), blurRadius: 30)],
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.7), blurRadius: 30)
+          ],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -284,30 +317,44 @@ class _ScannerScreenState extends State<ScannerScreen> {
               children: [
                 Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: color.withValues(alpha: 0.15), shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.15),
+                      shape: BoxShape.circle),
                   child: Icon(icon, color: color, size: 30),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     title,
-                    style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 17),
+                    style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 17),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 14),
-            _buildMetricRow('Surface estimée', '${res.surfacePercentage.toStringAsFixed(1)}%', color),
+            _buildMetricRow('Surface estimée',
+                '${res.surfacePercentage.toStringAsFixed(1)}%', color),
             const SizedBox(height: 6),
-            _buildMetricRow('Netteté', res.sharpnessScore.toStringAsFixed(0), Colors.white70),
+            _buildMetricRow('Netteté', res.sharpnessScore.toStringAsFixed(0),
+                Colors.white70),
             if (res.defects.isNotEmpty) ...[
               const SizedBox(height: 6),
-              _buildMetricRow('Défauts détectés', '${res.defects.length}', Colors.amberAccent),
+              _buildMetricRow('Défauts détectés', '${res.defects.length}',
+                  Colors.amberAccent),
             ],
             const SizedBox(height: 14),
-            Text(res.verdict.reason, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+            Text(res.verdict.reason,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
-            Text(res.verdict.legalNotice, style: const TextStyle(color: Colors.white60, fontSize: 12, height: 1.4)),
+            Text(res.verdict.legalNotice,
+                style: const TextStyle(
+                    color: Colors.white60, fontSize: 12, height: 1.4)),
           ],
         ),
       ),
@@ -318,13 +365,20 @@ class _ScannerScreenState extends State<ScannerScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
-        Text(value, style: TextStyle(color: valueColor, fontSize: 13, fontWeight: FontWeight.bold)),
+        Text(label,
+            style: const TextStyle(color: Colors.white54, fontSize: 13)),
+        Text(value,
+            style: TextStyle(
+                color: valueColor, fontSize: 13, fontWeight: FontWeight.bold)),
       ],
     );
   }
 
-  Widget _buildPill({required IconData icon, required Color color, required String message, required String subtext}) {
+  Widget _buildPill(
+      {required IconData icon,
+      required Color color,
+      required String message,
+      required String subtext}) {
     return Container(
       margin: const EdgeInsets.all(20),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -340,11 +394,17 @@ class _ScannerScreenState extends State<ScannerScreen> {
             children: [
               Icon(icon, color: color, size: 24),
               const SizedBox(width: 10),
-              Expanded(child: Text(message, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 15))),
+              Expanded(
+                  child: Text(message,
+                      style: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15))),
             ],
           ),
           const SizedBox(height: 6),
-          Text(subtext, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          Text(subtext,
+              style: const TextStyle(color: Colors.white54, fontSize: 12)),
         ],
       ),
     );
@@ -381,13 +441,18 @@ class _DefectBoxPainter extends CustomPainter {
         defect.bottom * scaleY,
       );
 
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(6)), paint);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(rect, const Radius.circular(6)), paint);
 
       // Label
       final textPainter = TextPainter(
         text: TextSpan(
           text: '${defect.label} ${(defect.confidence * 100).toInt()}%',
-          style: const TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold, backgroundColor: Colors.black54),
+          style: const TextStyle(
+              color: Colors.redAccent,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              backgroundColor: Colors.black54),
         ),
         textDirection: TextDirection.ltr,
       )..layout();

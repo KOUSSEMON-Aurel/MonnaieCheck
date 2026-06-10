@@ -1,77 +1,67 @@
-/// Vision Pipeline Architecture — MonnaieCheck
-/// 
-/// This is the architectural bridge between the Dart layer and native C++/TFLite.
-/// The actual inference is triggered from camera_pipeline_service.dart → Isolate.
+/// Vision Pipeline — MonnaieCheck (Zero-Dataset Architecture)
 ///
-/// To activate:
-///   1. Add your quantized models to assets/models/
-///   2. Uncomment the Interpreter.fromAsset calls
-///   3. Wire the mat pointer from opencv_dart for direct memory pass
+/// Architecture overview:
+///
+///   [Camera Frame (YUV)]
+///        │
+///        ├─► [ML Kit Object Detector]  ← Model managed by Google Play Services
+///        │         (gets bounding box of the currency)
+///        │
+///        ├─► [ML Kit Text Recognition] ← Model managed by Google Play Services
+///        │         (reads serial number)
+///        │
+///        └─► [CvEngine (OpenCV)]       ← Zero-dataset, pure math
+///                  - Surface estimation (Canny + contours)
+///                  - Art.14 ink detection (LAB color space)
+///                  - Coin convexity (contourArea / hullArea)
+///                  - HSV histogram for denomination
+///
+/// NO local .tflite files. NO custom datasets. NO assets/models/ required.
+/// ML Kit models are downloaded & managed by the Google Play Services daemon.
 
-import 'dart:typed_data';
-import 'package:tflite_flutter/tflite_flutter.dart';
-import 'rule_engine.dart';
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
+/// Wraps ML Kit detectors. Both are singletons to avoid re-initialization cost.
 class VisionPipeline {
-  Interpreter? _yoloInterpreter;
-  Interpreter? _efficientNetInterpreter;
-  bool _initialized = false;
+  // ML Kit Object Detector — managed by Play Services, no .tflite required
+  static final ObjectDetector _objectDetector = ObjectDetector(
+    options: ObjectDetectorOptions(
+      mode: DetectionMode.stream, // real-time, low latency
+      classifyObjects: true,
+      multipleObjects: false, // one currency at a time
+    ),
+  );
 
-  Future<void> init() async {
-    // Uncomment when models are placed in assets/models/
-    // _yoloInterpreter = await Interpreter.fromAsset('models/yolov8n_quant.tflite');
-    // _efficientNetInterpreter = await Interpreter.fromAsset('models/efficientnet_l0_quant.tflite');
-    _initialized = false;
+  // ML Kit Text Recognizer — Latin script (handles BCEAO serial numbers)
+  static final TextRecognizer _textRecognizer = TextRecognizer(
+    script: TextRecognitionScript.latin,
+  );
+
+  bool get isReady =>
+      true; // Always ready — models are managed by Play Services
+
+  /// Detect the bounding box of a currency note/coin in the frame.
+  /// Returns the first detected object, or null if nothing is found.
+  Future<DetectedObject?> detectObject(InputImage inputImage) async {
+    final objects = await _objectDetector.processImage(inputImage);
+    return objects.isNotEmpty ? objects.first : null;
   }
 
-  bool get isReady => _initialized;
-
-  /// Process a banknote RGB frame
-  Future<ValidationResult> processBanknote({
-    required Uint8List rgbBytes,
-    required int width,
-    required int height,
-  }) async {
-    // Step 1: OpenCV — Canny + Homography + surface estimation
-    const surfacePercent = 94.5;
-
-    // Step 2: YOLOv8n — defect detection (bounding boxes)
-    // _yoloInterpreter.runForMultipleInputs(...);
-
-    return RuleEngine.validateBanknote(
-      AnalysisMetrics(
-        isBanknote: true,
-        surfacePercentage: surfacePercent,
-        hasAnomalousInk: false,
-        isSerialNumberReadable: true,
-        textureSharpness: 85.0,
-        denomination: "Unknown",
-      ),
-    );
-  }
-
-  /// Process a coin RGB frame
-  Future<ValidationResult> processCoin({
-    required Uint8List rgbBytes,
-    required int width,
-    required int height,
-  }) async {
-    // Step 1: OpenCV — HoughCircles + radial profiling
-    // Step 2: EfficientNet-Lite0 — texture wear analysis
-    // _efficientNetInterpreter.run(input, output);
-
-    return RuleEngine.validateCoin(
-      AnalysisMetrics(
-        isBanknote: false,
-        surfacePercentage: 100.0,
-        textureSharpness: 90.0,
-        coinConvexity: 0.99,
-      ),
-    );
+  /// Read the serial number from a banknote.
+  Future<String?> readSerialNumber(InputImage inputImage) async {
+    final result = await _textRecognizer.processImage(inputImage);
+    // A valid BCEAO serial number is 10–12 uppercase alphanumeric characters
+    final serialPattern = RegExp(r'[A-Z0-9]{10,12}');
+    for (final block in result.blocks) {
+      final match = serialPattern.firstMatch(block.text);
+      if (match != null) return match.group(0);
+    }
+    return null; // Not found or not readable
   }
 
   void dispose() {
-    _yoloInterpreter?.close();
-    _efficientNetInterpreter?.close();
+    _objectDetector.close();
+    _textRecognizer.close();
   }
 }
