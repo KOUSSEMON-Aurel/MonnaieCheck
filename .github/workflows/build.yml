@@ -39,4 +39,4 @@ jobs:
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'latest-build' }}
           files: |
-            */app-*-release.apk
+            build/app/outputs/flutter-apk/app-*-release.apk
