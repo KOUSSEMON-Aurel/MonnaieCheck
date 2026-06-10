@@ -44,14 +44,26 @@ class PipelineResult {
   final List<DefectBox> defects;
   final bool isBanknote;
   final bool flashWasActivated;
+  final List<cv.Point>? polyPoints;
+  final cv.Point? circleCenter;
+  final double? circleRadius;
+  final bool shouldCapture;
+  final List<cv.Point>? nextStablePoints;
+  final int nextStableFrames;
 
-  const PipelineResult({
+  PipelineResult({
     required this.verdict,
     required this.surfacePercentage,
     required this.sharpnessScore,
     required this.defects,
     required this.isBanknote,
     this.flashWasActivated = false,
+    this.polyPoints,
+    this.circleCenter,
+    this.circleRadius,
+    this.shouldCapture = false,
+    this.nextStablePoints,
+    this.nextStableFrames = 0,
   });
 }
 
@@ -62,13 +74,17 @@ class CameraPipelineService {
   // Blur filter threshold — tuned for FCFA currency size at ~30cm
   static const double sharpnessThreshold = 80.0;
 
-  // Getter for the threshold
-  double get currentSharpnessThreshold => sharpnessThreshold;
-
   // Luminance thresholds for auto torch (Hysteresis)
   static const double _luxOnThreshold = 50.0;
+
   static const double _luxOffThreshold = 85.0;
   bool _flashWasPreviouslyActive = false;
+
+  // Stability state (Main Thread)
+  List<cv.Point>? _lastPoints;
+  int _stableFrames = 0;
+  static const int stableThreshold = 5;
+  static const double distanceThreshold = 10.0;
 
   /// Called on every camera frame from startImageStream.
   /// Returns null if frame is skipped (either pipeline is busy or image is blurry).
@@ -96,8 +112,14 @@ class CameraPipelineService {
           uvPixelStride: yuv420Frame.planes[1].bytesPerPixel ?? 1,
           isBanknote: isBanknote,
           currentFlashState: _flashWasPreviouslyActive,
+          lastStablePoints: _lastPoints,
+          stableFrames: _stableFrames,
         ),
       );
+
+      // Persist stability state
+      _lastPoints = result.nextStablePoints;
+      _stableFrames = result.nextStableFrames;
 
       // === STATEFUL AUTO-TORCH (Hysteresis) ===
       // Only toggle if the state has truly changed based on hysteresis
@@ -125,8 +147,9 @@ class _PipelineInput {
   final int uvRowStride;
   final int uvPixelStride;
   final bool isBanknote;
-
   final bool currentFlashState;
+  final List<cv.Point>? lastStablePoints;
+  final int stableFrames;
 
   _PipelineInput({
     required this.yPlane,
@@ -138,6 +161,8 @@ class _PipelineInput {
     required this.uvPixelStride,
     required this.isBanknote,
     required this.currentFlashState,
+    this.lastStablePoints,
+    this.stableFrames = 0,
   });
 }
 
@@ -204,18 +229,30 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   double surfacePercentage = 0.0;
   bool inkDetected = false;
   double convexity = 1.0;
+  List<cv.Point>? polyPoints;
+  cv.Point? circleCenter;
+  double? circleRadius;
 
   if (input.isBanknote) {
-    // Surface estimation (Simplified for budget device: non-zero pixels)
+    // Surface estimation
     final total = cv.countNonZero(mat);
     surfacePercentage = (total / totalPixels) * 100;
 
-    // Art 14 Ink Detection (LAB color space requires BGR)
-    // For now, we use a placeholder for BGR conversion or skip if Y-only.
-    // inkDetected = cvEngine.detectArt14Ink(bgrMat).$2;
+    // Pro Mode: Dynamic Quadrilateral Detection
+    polyPoints = cvEngine.findQuadrilateral(mat);
   } else {
-    convexity = cvEngine
-        .calculateConvexity(mat); // Modified calculateConvexity to handle Gray
+    convexity = cvEngine.calculateConvexity(mat);
+
+    // Pro Mode: Dynamic Circle Detection
+    final circles = cvEngine.findCircles(mat);
+    if (!circles.isEmpty) {
+      // Get the first circle (x, y, r)
+      // In dartcv4 Mat (Nx1x3), we can access it via at<T>
+      final cx = circles.at<double>(0, 0);
+      final cy = circles.at<double>(0, 1);
+      circleRadius = circles.at<double>(0, 2);
+      circleCenter = cv.Point(cx.toInt(), cy.toInt());
+    }
   }
 
   // ─────────────────────────────────────────────────────────
@@ -239,6 +276,38 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
   // ─────────────────────────────────────────────────────────
   final defects = <DefectBox>[];
 
+  // ─────────────────────────────────────────────────────────
+  // STEP 4: Stability & Auto-Capture Logic
+  // ─────────────────────────────────────────────────────────
+  bool shouldCapture = false;
+  List<cv.Point>? nextStablePoints = input.lastStablePoints;
+  int nextStableFrames = input.stableFrames;
+
+  if (polyPoints != null && polyPoints.length == 4) {
+    if (input.lastStablePoints != null && input.lastStablePoints!.length == 4) {
+      double totalDist = 0;
+      for (var i = 0; i < 4; i++) {
+        final dX = polyPoints[i].x - input.lastStablePoints![i].x;
+        final dY = polyPoints[i].y - input.lastStablePoints![i].y;
+        totalDist += (dX * dX + dY * dY);
+      }
+
+      if (totalDist <
+          CameraPipelineService.distanceThreshold *
+              CameraPipelineService.distanceThreshold) {
+        nextStableFrames++;
+      } else {
+        nextStableFrames = 0;
+      }
+    }
+    nextStablePoints = polyPoints;
+
+    if (nextStableFrames >= CameraPipelineService.stableThreshold) {
+      shouldCapture = true;
+      nextStableFrames = 0; // Reset after trigger
+    }
+  }
+
   return PipelineResult(
     verdict: verdict,
     surfacePercentage: surfacePercentage,
@@ -246,6 +315,12 @@ PipelineResult _runPipelineInIsolate(_PipelineInput input) {
     defects: defects,
     isBanknote: input.isBanknote,
     flashWasActivated: needsFlash,
+    polyPoints: polyPoints,
+    circleCenter: circleCenter,
+    circleRadius: circleRadius,
+    shouldCapture: shouldCapture,
+    nextStablePoints: nextStablePoints,
+    nextStableFrames: nextStableFrames,
   );
 }
 

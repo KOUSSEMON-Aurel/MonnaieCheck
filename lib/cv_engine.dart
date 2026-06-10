@@ -107,6 +107,63 @@ class CvEngine {
     return winner;
   }
 
+  /// Finds the best quadrilateral (4 corners) in the frame, likely a banknote.
+  /// Returns a list of 4 points if found, otherwise an empty list.
+  List<cv.Point> findQuadrilateral(cv.Mat mat) {
+    final gray = mat.channels == 3 ? cv.cvtColor(mat, cv.COLOR_BGR2GRAY) : mat;
+    final blurred = cv.gaussianBlur(gray, (5, 5), 0);
+    final edged = cv.canny(blurred, 75, 200);
+
+    final (contours, _) =
+        cv.findContours(edged, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    cv.VecPoint? bestContour;
+    double maxArea = 0;
+
+    for (var i = 0; i < contours.length; i++) {
+      final contour = contours[i];
+      final area = cv.contourArea(contour);
+      if (area < 5000) continue; // Skip small noise
+
+      final peri = cv.arcLength(contour, true);
+      final approx = cv.approxPolyDP(contour, 0.02 * peri, true);
+
+      if (approx.length == 4 && area > maxArea) {
+        bestContour = approx;
+        maxArea = area;
+      }
+    }
+
+    if (bestContour != null) {
+      final points = <cv.Point>[];
+      for (var i = 0; i < bestContour.length; i++) {
+        points.add(bestContour[i]);
+      }
+      return points;
+    }
+
+    return [];
+  }
+
+  /// Detects circular objects (coins) using Hough Circle Transform.
+  cv.Mat findCircles(cv.Mat mat) {
+    final gray = mat.channels == 3 ? cv.cvtColor(mat, cv.COLOR_BGR2GRAY) : mat;
+    final blurred = cv.medianBlur(gray, 5);
+
+    // In some dartcv4 versions, HoughCircles returns a Mat (Nx1x3)
+    final circles = cv.HoughCircles(
+      blurred,
+      cv.HOUGH_GRADIENT,
+      1.2,
+      20.0, // minDist
+      param1: 150,
+      param2: 40,
+      minRadius: 50,
+      maxRadius: 250,
+    );
+    return circles;
+  }
+
   /// Calculates the geometric integrity of a coin.
   double calculateConvexity(cv.Mat coinMat) {
     // If input is already grayscale (CV_8UC1), skip conversion

@@ -4,7 +4,7 @@
 ///
 ///   [Camera Frame (YUV)]
 ///        │
-///        ├─► [ML Kit Object Detector]  ← Model managed by Google Play Services
+///        ├─► [ML Kit Object Detector]  ← Model bundled in assets
 ///        │         (gets bounding box of the currency)
 ///        │
 ///        ├─► [ML Kit Text Recognition] ← Model managed by Google Play Services
@@ -16,20 +16,20 @@
 ///                  - Coin convexity (contourArea / hullArea)
 ///                  - HSV histogram for denomination
 ///
-/// NO local .tflite files. NO custom datasets. NO assets/models/ required.
-/// ML Kit models are downloaded & managed by the Google Play Services daemon.
 
 import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 /// Wraps ML Kit detectors. Both are singletons to avoid re-initialization cost.
 class VisionPipeline {
-  // ML Kit Object Detector — managed by Play Services, no .tflite required
+  // ML Kit Object Detector — local version for offline bundling
+  // USES LocalObjectDetectorOptions for ML Kit 0.15.1
   static final ObjectDetector _objectDetector = ObjectDetector(
-    options: ObjectDetectorOptions(
-      mode: DetectionMode.stream, // real-time, low latency
+    options: LocalObjectDetectorOptions(
+      mode: DetectionMode.stream,
+      modelPath: 'assets/models/currency_detector.tflite',
       classifyObjects: true,
-      multipleObjects: false, // one currency at a time
+      multipleObjects: true,
     ),
   );
 
@@ -38,8 +38,7 @@ class VisionPipeline {
     script: TextRecognitionScript.latin,
   );
 
-  bool get isReady =>
-      true; // Always ready — models are managed by Play Services
+  bool get isReady => true;
 
   /// Detect the bounding box of a currency note/coin in the frame.
   /// Returns the first detected object, or null if nothing is found.

@@ -2,6 +2,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'camera_pipeline_service.dart';
 import 'rule_engine.dart';
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 
 class ScannerScreen extends StatefulWidget {
   final bool isBanknote;
@@ -15,9 +16,12 @@ class ScannerScreen extends StatefulWidget {
 class _ScannerScreenState extends State<ScannerScreen> {
   CameraController? _controller;
   final CameraPipelineService _pipeline = CameraPipelineService();
+
   PipelineResult? _lastResult;
   bool _isBlurry = false;
   bool _flashOn = false;
+  bool _isProcessingFrame = false;
+  bool _isNavigating = false;
 
   @override
   void initState() {
@@ -32,7 +36,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       _controller = CameraController(
         cameras[0],
-        // 720p MAX — sufficient for FCFA detection, saves RAM
         ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.yuv420,
@@ -50,21 +53,56 @@ class _ScannerScreenState extends State<ScannerScreen> {
     }
   }
 
-  /// Called at ~30fps. Backpressure is managed inside CameraPipelineService.
   Future<void> _onFrameReceived(CameraImage image) async {
+    if (_isProcessingFrame || _isNavigating) return;
+    _isProcessingFrame = true;
+
     final result = await _pipeline.processFrame(
       image,
       _controller!,
       widget.isBanknote,
     );
 
-    if (result == null || !mounted) return;
+    if (!mounted) return;
+
+    _onFrameProcessed(result);
+  }
+
+  void _onFrameProcessed(PipelineResult? result) {
+    if (result == null) {
+      setState(() => _isProcessingFrame = false);
+      return;
+    }
 
     setState(() {
       _lastResult = result;
-      _isBlurry = result.sharpnessScore < _pipeline.currentSharpnessThreshold;
+      _isBlurry =
+          result.sharpnessScore < CameraPipelineService.sharpnessThreshold;
       _flashOn = result.flashWasActivated;
+      _isProcessingFrame = false;
     });
+
+    // Auto-Capture Trigger
+    if (result.shouldCapture && !_isNavigating) {
+      _captureImage();
+    }
+  }
+
+  Future<void> _captureImage() async {
+    if (_isNavigating) return;
+    setState(() => _isNavigating = true);
+
+    // Stop stream to stabilize
+    await _controller?.stopImageStream();
+
+    // In a real app, we'd take a high-res photo here
+    // For now, we navigated to results with the current verdict
+    if (mounted) {
+      // Placeholder for navigation to a detailed result screen
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Auto-Capture Déclenchée !')),
+      );
+    }
   }
 
   @override
@@ -89,17 +127,30 @@ class _ScannerScreenState extends State<ScannerScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Camera Feed (full-screen)
+          // Camera Feed
           Positioned.fill(child: CameraPreview(_controller!)),
 
-          // Darkening overlay outside the scan zone
-          _buildScanZoneOverlay(size),
+          // ─────────────────────────────────────────────────────────
+          // DYNAMIC PRO OVERLAY (Perspective / Circles)
+          // ─────────────────────────────────────────────────────────
+          CustomPaint(
+            size: Size.infinite,
+            painter: PerspectiveOverlay(
+              polyPoints: _lastResult?.polyPoints,
+              circleCenter: _lastResult?.circleCenter,
+              circleRadius: _lastResult?.circleRadius,
+              cameraSize: Size(
+                _controller!.value.previewSize!.height,
+                _controller!.value.previewSize!.width,
+              ),
+            ),
+          ),
 
-          // Defect bounding boxes from YOLO/EfficientNet
+          // Defect bounding boxes
           if (_lastResult != null && _lastResult!.defects.isNotEmpty)
             _buildDefectBoxes(size),
 
-          // Status indicators (blur warning, flash indicator)
+          // Status indicators
           _buildStatusBar(),
 
           // Verdict Result Card
@@ -122,98 +173,6 @@ class _ScannerScreenState extends State<ScannerScreen> {
     );
   }
 
-  Widget _buildScanZoneOverlay(Size size) {
-    // Banknotes are scanned in portrait (vertical) for better ergonomics.
-    // Coins remain circular/square.
-    final areaW = widget.isBanknote ? size.width * 0.65 : size.width * 0.85;
-    final areaH = widget.isBanknote ? areaW * 1.6 : areaW;
-    final top = (size.height - areaH) / 2;
-    final left = (size.width - areaW) / 2;
-
-    return Stack(
-      children: [
-        // Dark overlay with a clear hole
-        ColorFiltered(
-          colorFilter: ColorFilter.mode(
-            Colors.black.withValues(alpha: 0.55),
-            BlendMode.srcOut,
-          ),
-          child: Stack(
-            children: [
-              Container(color: Colors.transparent),
-              Positioned(
-                top: top,
-                left: left,
-                child: Container(
-                  width: areaW,
-                  height: areaH,
-                  decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(
-                      widget.isBanknote ? 16 : areaW,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Border on scan zone
-        Positioned(
-          top: top,
-          left: left,
-          child: Container(
-            width: areaW,
-            height: areaH,
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: _isBlurry
-                    ? Colors.redAccent.withValues(alpha: 0.8)
-                    : Colors.blueAccent.withValues(alpha: 0.8),
-                width: 2.0,
-              ),
-              borderRadius: BorderRadius.circular(
-                widget.isBanknote ? 24 : areaW,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: (_isBlurry ? Colors.redAccent : Colors.blueAccent)
-                      .withValues(alpha: 0.2),
-                  blurRadius: 15,
-                  spreadRadius: 2,
-                )
-              ],
-            ),
-            alignment: Alignment.bottomCenter,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                Icon(
-                  widget.isBanknote ? Icons.portrait : Icons.circle_outlined,
-                  color: _isBlurry ? Colors.redAccent : Colors.blue[100],
-                  size: 20,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  widget.isBanknote ? 'ALIGNER LE BILLET' : 'ALIGNER LA PIÈCE',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: _isBlurry ? Colors.redAccent : Colors.blue[100],
-                    fontSize: 11,
-                    letterSpacing: 1.2,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Renders AI-detected defect bounding boxes on the camera preview
   Widget _buildDefectBoxes(Size screenSize) {
     return CustomPaint(
       size: screenSize,
@@ -264,37 +223,11 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Widget _buildResultCard() {
     final res = _lastResult!;
 
-    // Blur warning takes priority
-    if (_isBlurry) {
-      return Align(
-        alignment: Alignment.bottomCenter,
-        child: _buildPill(
-          icon: Icons.blur_on,
-          color: Colors.orange,
-          message: 'Stabilisez l\'appareil — Image floue',
-          subtext:
-              'Netteté: ${res.sharpnessScore.toStringAsFixed(0)} / ${CameraPipelineService.sharpnessThreshold.toInt()} requis',
-        ),
-      );
-    }
-
     final color = res.verdict.verdict == Verdict.mandatoryAcceptance
         ? Colors.greenAccent
         : res.verdict.verdict == Verdict.legitimateRefusal
             ? Colors.redAccent
             : Colors.orangeAccent;
-
-    final icon = res.verdict.verdict == Verdict.mandatoryAcceptance
-        ? Icons.check_circle_rounded
-        : res.verdict.verdict == Verdict.legitimateRefusal
-            ? Icons.cancel_rounded
-            : Icons.warning_rounded;
-
-    final title = switch (res.verdict.verdict) {
-      Verdict.mandatoryAcceptance => 'ACCEPTATION OBLIGATOIRE',
-      Verdict.legitimateRefusal => 'REFUS LÉGITIME',
-      Verdict.exchangeAtBCEAO => 'ÉCHANGE À LA BCEAO',
-    };
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -302,116 +235,78 @@ class _ScannerScreenState extends State<ScannerScreen> {
         margin: const EdgeInsets.all(20),
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E).withValues(alpha: 0.96),
+          color: const Color(0xFF1C1C1E).withOpacity(0.96),
           borderRadius: BorderRadius.circular(32),
-          border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.7), blurRadius: 30)
-          ],
+          border: Border.all(color: color.withOpacity(0.4), width: 1.5),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      shape: BoxShape.circle),
-                  child: Icon(icon, color: color, size: 30),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17),
-                  ),
-                ),
-              ],
+            Text(
+              res.isBanknote ? 'BILLET DÉTECTÉ' : 'PIÈCE DÉTECTÉE',
+              style: TextStyle(color: color, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 14),
-            _buildMetricRow('Surface estimée',
-                '${res.surfacePercentage.toStringAsFixed(1)}%', color),
-            const SizedBox(height: 6),
-            _buildMetricRow('Netteté', res.sharpnessScore.toStringAsFixed(0),
-                Colors.white70),
-            if (res.defects.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _buildMetricRow('Défauts détectés', '${res.defects.length}',
-                  Colors.amberAccent),
-            ],
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             Text(res.verdict.reason,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Text(res.verdict.legalNotice,
-                style: const TextStyle(
-                    color: Colors.white60, fontSize: 12, height: 1.4)),
+                style: const TextStyle(color: Colors.white)),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildMetricRow(String label, String value, Color valueColor) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label,
-            style: const TextStyle(color: Colors.white54, fontSize: 13)),
-        Text(value,
-            style: TextStyle(
-                color: valueColor, fontSize: 13, fontWeight: FontWeight.bold)),
-      ],
-    );
-  }
-
-  Widget _buildPill(
-      {required IconData icon,
-      required Color color,
-      required String message,
-      required String subtext}) {
-    return Container(
-      margin: const EdgeInsets.all(20),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E).withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: color, size: 24),
-              const SizedBox(width: 10),
-              Expanded(
-                  child: Text(message,
-                      style: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15))),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(subtext,
-              style: const TextStyle(color: Colors.white54, fontSize: 12)),
-        ],
       ),
     );
   }
 }
 
-/// CustomPainter that draws bounding boxes from the IA model on the camera preview
+class PerspectiveOverlay extends CustomPainter {
+  final List<cv.Point>? polyPoints;
+  final cv.Point? circleCenter;
+  final double? circleRadius;
+  final Size cameraSize;
+
+  PerspectiveOverlay({
+    this.polyPoints,
+    this.circleCenter,
+    this.circleRadius,
+    required this.cameraSize,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (cameraSize.width == 0 || cameraSize.height == 0) return;
+    final scaleX = size.width / cameraSize.width;
+    final scaleY = size.height / cameraSize.height;
+
+    final paint = Paint()
+      ..color = Colors.green.withOpacity(0.7)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0;
+
+    final fillPaint = Paint()
+      ..color = Colors.green.withOpacity(0.1)
+      ..style = PaintingStyle.fill;
+
+    if (polyPoints != null && polyPoints!.length == 4) {
+      final path = Path();
+      path.moveTo(polyPoints![0].x * scaleX, polyPoints![0].y * scaleY);
+      for (var i = 1; i < 4; i++) {
+        path.lineTo(polyPoints![i].x * scaleX, polyPoints![i].y * scaleY);
+      }
+      path.close();
+      canvas.drawPath(path, fillPaint);
+      canvas.drawPath(path, paint);
+    }
+
+    if (circleCenter != null && circleRadius != null) {
+      final center = Offset(circleCenter!.x * scaleX, circleCenter!.y * scaleY);
+      final radius = circleRadius! * scaleX;
+      canvas.drawCircle(center, radius, fillPaint);
+      canvas.drawCircle(center, radius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant PerspectiveOverlay oldDelegate) => true;
+}
+
 class _DefectBoxPainter extends CustomPainter {
   final List<DefectBox> defects;
   final Size previewSize;
@@ -430,9 +325,9 @@ class _DefectBoxPainter extends CustomPainter {
 
     for (final defect in defects) {
       final paint = Paint()
-        ..color = Colors.redAccent.withValues(alpha: 0.85)
+        ..color = Colors.redAccent
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5;
+        ..strokeWidth = 2.0;
 
       final rect = Rect.fromLTRB(
         defect.left * scaleX,
@@ -440,28 +335,10 @@ class _DefectBoxPainter extends CustomPainter {
         defect.right * scaleX,
         defect.bottom * scaleY,
       );
-
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(rect, const Radius.circular(6)), paint);
-
-      // Label
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: '${defect.label} ${(defect.confidence * 100).toInt()}%',
-          style: const TextStyle(
-              color: Colors.redAccent,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              backgroundColor: Colors.black54),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-
-      textPainter.paint(canvas, rect.topLeft + const Offset(4, 4));
+      canvas.drawRect(rect, paint);
     }
   }
 
   @override
-  bool shouldRepaint(_DefectBoxPainter old) =>
-      old.defects != defects || old.previewSize != previewSize;
+  bool shouldRepaint(_DefectBoxPainter old) => true;
 }
